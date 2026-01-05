@@ -10,6 +10,16 @@ You MUST implement:
 DO NOT change function signatures.
 """
 
+# Uncomment for old MacBook
+# import os
+# os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # Force CPU usage
+# os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+# import matplotlib
+# matplotlib.use('Agg')  # Use non-interactive backend
+# import tensorflow as tf
+# # Disable GPU
+# tf.config.set_visible_devices([], 'GPU')
+
 import json
 import numpy as np
 import matplotlib.pyplot as plt
@@ -159,7 +169,8 @@ def hill_climb(
     model,
     target_label: str,
     epsilon: float = 0.30,
-    iterations: int = 300
+    iterations: int = 300,
+    early_stop: int = 20
 ) -> Tuple[np.ndarray, float]:
     """
     Main hill-climbing loop.
@@ -180,8 +191,53 @@ def hill_climb(
         (final_image, final_fitness)
     """
 
-    # TODO (team work)
-    raise NotImplementedError("hill_climb must be implemented by the team.")
+    # Start from initial seed
+    current_image = initial_seed.copy()
+    current_fitness = compute_fitness(current_image, model, target_label)
+    steps_no_improve = 0
+
+    for iteration in range(iterations):
+        # Generate neighbors using mutate_seed
+        neighbors = mutate_seed(current_image, epsilon)
+        
+        # Enforce L∞ constraint relative to initial_seed
+        constrained_neighbors = []
+        for neighbor in neighbors:
+            diff = neighbor - initial_seed
+            diff = np.clip(diff, -255*epsilon, 255*epsilon)
+            constrained_neighbor = np.clip(initial_seed + diff, 0, 255)
+            constrained_neighbors.append(constrained_neighbor)
+        
+        # Add current image to candidates (elitism)
+        candidates = [current_image] + constrained_neighbors
+        
+        # Use select_best to pick the winner
+        best_image, best_fitness = select_best(candidates, model, target_label)
+        
+        # Accept only if fitness improves (lower is better)
+        if best_fitness < current_fitness:
+            current_image = best_image
+            current_fitness = best_fitness
+            
+            # Check if target class is broken confidently
+            img_batch = np.expand_dims(current_image, axis=0)
+            predictions = model.predict(img_batch)
+            decoded_pred = decode_predictions(predictions, top=1)[0]
+            predicted_label = decoded_pred[0][1]
+            predicted_prob = decoded_pred[0][2]
+            
+            if predicted_label == target_label and predicted_prob > 0.9:
+                print(f"Target broken at iteration {iteration} with confidence {predicted_prob:.4f}")
+                break
+        else:
+            steps_no_improve += 1
+        
+        # Optional: early stopping
+        if steps_no_improve >= early_stop:
+            print(f"No improvement for {early_stop} steps, stopping at iteration {iteration}.")
+            break
+    
+    return current_image, current_fitness
 
 
 # ============================================================
