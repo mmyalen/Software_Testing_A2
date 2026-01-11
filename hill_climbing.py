@@ -27,6 +27,7 @@ from typing import List, Tuple
 from keras.applications import vgg16
 from keras.applications.imagenet_utils import decode_predictions
 from keras.utils import array_to_img, load_img, img_to_array
+import time 
 
 
 # ============================================================
@@ -226,7 +227,7 @@ def hill_climb(
             predicted_label = decoded_pred[0][1]
             predicted_prob = decoded_pred[0][2]
             
-            if predicted_label == target_label and predicted_prob > 0.9:
+            if predicted_label != target_label and predicted_prob > 0.9:
                 print(f"Target broken at iteration {iteration} with confidence {predicted_prob:.4f}")
                 break
         else:
@@ -252,45 +253,74 @@ if __name__ == "__main__":
     with open("data/image_labels.json") as f:
         image_list = json.load(f)
 
-    # Pick first entry
-    item = image_list[0]
-    image_path = "images/" + item["image"]
-    target_label = item["label"]
+    stats = {} 
 
-    print(f"Loaded image: {image_path}")
-    print(f"Target label: {target_label}")
+    for image_nr in range(0, 10):
+        # Pick first entry
+        item = image_list[image_nr]
+        image_path = "images/" + item["image"]
+        target_label = item["label"]
 
-    img = load_img(image_path)
-    plt.imshow(img)
-    plt.title("Original image")
-    plt.show()
+        stats[target_label] = {} 
 
-    img_array = img_to_array(img)
-    seed = img_array.copy()
+        print(f"Loaded image: {image_path}")
+        print(f"Target label: {target_label}")
 
-    # Print baseline top-5 predictions
-    print("\nBaseline predictions (top-5):")
-    preds = model.predict(np.expand_dims(seed, axis=0))
-    for cl in decode_predictions(preds, top=5)[0]:
-        print(f"{cl[1]:20s}  prob={cl[2]:.5f}")
+        img = load_img(image_path)
+        plt.imshow(img)
+        plt.title("Original image")
+        plt.show()
 
-    # Run hill climbing attack
-    final_img, final_fitness = hill_climb(
-        initial_seed=seed,
-        model=model,
-        target_label=target_label,
-        epsilon=0.30,
-        iterations=300
-    )
+        img_array = img_to_array(img)
+        seed = img_array.copy()
 
-    print("\nFinal fitness:", final_fitness)
+        # Print baseline top-5 predictions
+        print("\nBaseline predictions (top-5):")
+        preds = model.predict(np.expand_dims(seed, axis=0))
+        for cl in decode_predictions(preds, top=5)[0]:
+            print(f"{cl[1]:20s}  prob={cl[2]:.5f}")
 
-    plt.imshow(array_to_img(final_img))
-    plt.title(f"Adversarial Result — fitness={final_fitness:.4f}")
-    plt.show()
+        st_time = time.time() 
+        # Run hill climbing attack
+        final_img, final_fitness = hill_climb(
+            initial_seed=seed,
+            model=model,
+            target_label=target_label,
+            epsilon=0.30,
+            iterations=300
+        )
+        en_time = time.time() 
 
-    # Print final predictions
-    final_preds = model.predict(np.expand_dims(final_img, axis=0))
-    print("\nFinal predictions:")
-    for cl in decode_predictions(final_preds, top=5)[0]:
-        print(cl)
+        print("Attack took:", en_time - st_time, "seconds")
+        print("\nFinal fitness:", final_fitness)
+
+        orig = img_to_array(img)
+        mod  = img_to_array(final_img)
+
+        changed_pixels = np.any(orig != mod, axis=-1)
+        num_changed_pixels = np.sum(changed_pixels)
+
+        linf_distance = np.max(np.abs(orig - mod))
+        total_pixels = orig.shape[0] * orig.shape[1]
+
+        print(f"L_inf distance = {linf_distance}\tChanged_pixels = {100.0 * num_changed_pixels / total_pixels}%")
+        stats[target_label]['linf'] = linf_distance 
+        stats[target_label]['pixels'] = 100.0 * num_changed_pixels / total_pixels
+
+        # Print final predictions
+        final_preds = model.predict(np.expand_dims(final_img, axis=0))
+        print("\nFinal predictions:")
+        for cl in decode_predictions(final_preds, top=5)[0]:
+            print(cl)
+
+        plt.imshow(array_to_img(final_img))
+        plt.title(f"{decode_predictions(final_preds, top=5)[0][0][1]} - fitness={final_fitness:.4f} in {int((en_time - st_time) * 100 // 120)} iters")
+        plt.savefig(f'hc_results/{item["image"]}_hc.png')
+        plt.show()
+
+
+    for label, ss in stats.items():
+        print(label)
+        print(ss) 
+        print() 
+        

@@ -8,9 +8,12 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import torchvision.transforms as transforms
 from PIL import Image
+import time 
 
 from cleverhans.torch.attacks.fast_gradient_method import fast_gradient_method
 from cleverhans.torch.attacks.projected_gradient_descent import projected_gradient_descent
+
+from keras.utils import img_to_array 
 
 # -----------------------------
 # Utility: parse Imagenet prediction
@@ -67,12 +70,15 @@ PGD_STEP_SIZE = 0.01
 OUTDIR = "attack_results"
 os.makedirs(OUTDIR, exist_ok=True)
 
+stats = {} 
+
 # ================================================================
 # 7. Run attacks for every image from the JSON file
 # ================================================================
 for entry in tqdm(items, desc="Running attacks"):
     image_file = entry["image"]
     human_label = entry["label"]  # e.g. "goldfish"
+    stats[image_file] = {} 
 
     # -----------------------------
     # Load + preprocess image
@@ -103,16 +109,21 @@ for entry in tqdm(items, desc="Running attacks"):
     print(f"Human label: {human_label}")
     print(f"Model prediction (clean): {pred_clean} ({prob_clean:.3f})")
 
+    st_time = time.time() 
+
     # =====================================================
     # FGM Attack
     # =====================================================
     x_fgm = fast_gradient_method(net, x, EPS, np.inf)
     out_fgm = net(x_fgm)
+    en_time = time.time() 
     pred_fgm, prob_fgm = parse_prediction(out_fgm, imagenet_labels)
 
     save_image(x_fgm, os.path.join(OUTDIR, f"{image_file}_fgm.png"))
 
-    print(f"FGM prediction: {pred_fgm} ({prob_fgm:.3f})")
+    print(f"FGM prediction: {pred_fgm} ({prob_fgm:.3f}) took {en_time - st_time}s")
+    
+    st_time = time.time() 
 
     # =====================================================
     # PGD Attack
@@ -122,11 +133,36 @@ for entry in tqdm(items, desc="Running attacks"):
     )
 
     out_pgd = net(x_pgd)
+    en_time = time.time() 
     pred_pgd, prob_pgd = parse_prediction(out_pgd, imagenet_labels)
 
     save_image(x_pgd, os.path.join(OUTDIR, f"{image_file}_pgd.png"))
 
-    print(f"PGD prediction: {pred_pgd} ({prob_pgd:.3f})")
+
+    print(f"PGD prediction: {pred_pgd} ({prob_pgd:.3f}) took {en_time - st_time}s")
+
+    orig = x.squeeze(0)   
+    mod_pgd = x_pgd.squeeze(0)
+    mod_fgm = x_fgm.squeeze(0)
+
+    epss = 1e-6
+
+    changed_pixels_pgd = (orig - mod_pgd).abs().gt(epss).any(dim=0)
+    changed_pixels_fgm = (orig - mod_fgm).abs().gt(epss).any(dim=0)
+
+    num_changed_pixels_pgd = changed_pixels_pgd.sum().item()
+    num_changed_pixels_fgm = changed_pixels_fgm.sum().item()
+
+    total_pixels = orig.shape[1] * orig.shape[2]
+
+    changed_pct_pgd = 100.0 * num_changed_pixels_pgd / total_pixels
+    changed_pct_fgm = 100.0 * num_changed_pixels_fgm / total_pixels
+
+    linf_distance_pgd = (orig - mod_pgd).abs().max().item()
+    linf_distance_fgm = (orig - mod_fgm).abs().max().item()
+
+    stats[image_file]['pgd'] = (changed_pct_pgd, linf_distance_pgd)
+    stats[image_file]['fgm'] = (changed_pct_fgm, linf_distance_fgm)
 
     # =====================================================
     # Summary for this image
@@ -138,3 +174,6 @@ for entry in tqdm(items, desc="Running attacks"):
         print("PGD correct?", imagenet_labels.index(pred_pgd) == true_idx)
 
     print("------------------------------------------------------")
+    # break
+
+print(stats)
